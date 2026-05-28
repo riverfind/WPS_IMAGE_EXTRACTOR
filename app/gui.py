@@ -266,6 +266,10 @@ class ImageExtractorApp(tk.Tk):
         target_cache[cache_key] = photo
         return photo
 
+    def _focus_grid_area(self) -> None:
+        if self.canvas.winfo_exists():
+            self.after_idle(self.canvas.focus_set)
+
     def _bind_keyboard_navigation(self) -> None:
         self.bind_all("<Up>", lambda event: self._on_grid_key(event, "up"))
         self.bind_all("<Down>", lambda event: self._on_grid_key(event, "down"))
@@ -273,6 +277,8 @@ class ImageExtractorApp(tk.Tk):
         self.bind_all("<Right>", lambda event: self._on_grid_key(event, "right"))
         self.bind_all("<Prior>", lambda event: self._on_grid_key(event, "page_up"))
         self.bind_all("<Next>", lambda event: self._on_grid_key(event, "page_down"))
+        self.bind_all("<Return>", self._on_enter_key)
+        self.bind_all("<space>", self._on_space_key)
 
     def open_document(self) -> None:
         path = filedialog.askopenfilename(
@@ -299,6 +305,7 @@ class ImageExtractorApp(tk.Tk):
         self._reset_document_view_state()
         self.status_var.set(f"已打开 {session.document_path.name}，共提取 {session.total_images} 张图片。")
         self.refresh_all()
+        self._focus_grid_area()
 
     def reload_document(self) -> None:
         try:
@@ -317,6 +324,7 @@ class ImageExtractorApp(tk.Tk):
         self._reset_document_view_state()
         self.status_var.set(f"已重新加载 {session.document_path.name}，共提取 {session.total_images} 张图片。")
         self.refresh_all()
+        self._focus_grid_area()
 
     def refresh_all(self) -> None:
         try:
@@ -404,6 +412,7 @@ class ImageExtractorApp(tk.Tk):
             return
         self._rerender_visible_slots(force=True)
         self.refresh_preview()
+        self._focus_grid_area()
 
     def on_check(self, image_id: str, selected: bool) -> None:
         try:
@@ -413,6 +422,7 @@ class ImageExtractorApp(tk.Tk):
             messagebox.showerror("勾选失败", str(exc), parent=self)
             return
         self.selection_var.set(f"已选：{session.selected_count}")
+        self._focus_grid_area()
 
     def select_all(self) -> None:
         try:
@@ -423,6 +433,7 @@ class ImageExtractorApp(tk.Tk):
         self.status_var.set("已选中当前可见图片。")
         self._rerender_visible_slots(force=True)
         self.refresh_all_stats()
+        self._focus_grid_area()
 
     def invert_selection(self) -> None:
         try:
@@ -433,6 +444,7 @@ class ImageExtractorApp(tk.Tk):
         self.status_var.set("已对当前可见图片执行反选。")
         self._rerender_visible_slots(force=True)
         self.refresh_all_stats()
+        self._focus_grid_area()
 
     def on_select_duplicate_group(self, md5: str) -> None:
         try:
@@ -444,6 +456,7 @@ class ImageExtractorApp(tk.Tk):
         self.selection_var.set(f"已选：{session.selected_count}")
         self.status_var.set(f"已通过重复组入口选中 {count} 张相同图片。")
         self._rerender_visible_slots(force=True)
+        self._focus_grid_area()
 
     def filter_selected(self) -> None:
         try:
@@ -453,6 +466,7 @@ class ImageExtractorApp(tk.Tk):
             return
         self.status_var.set(f"已隐藏 {count} 张选中图片。")
         self.refresh_all()
+        self._focus_grid_area()
 
     def clear_filters(self) -> None:
         try:
@@ -462,6 +476,7 @@ class ImageExtractorApp(tk.Tk):
             return
         self.status_var.set("已恢复全部过滤项。")
         self.refresh_all()
+        self._focus_grid_area()
 
     def export_selected(self) -> None:
         try:
@@ -480,6 +495,7 @@ class ImageExtractorApp(tk.Tk):
         success, failed = self.service.export_selected(Path(output_dir))
         self.status_var.set(f"导出完成：成功 {success} 张，失败 {failed} 张。")
         messagebox.showinfo("导出完成", f"成功：{success} 张\n失败：{failed} 张", parent=self)
+        self._focus_grid_area()
 
     def delete_selected(self) -> None:
         try:
@@ -511,6 +527,7 @@ class ImageExtractorApp(tk.Tk):
             parent=self,
         )
         self.refresh_all()
+        self._focus_grid_area()
 
     def locate_image(self, image_id: str) -> NavigationResult:
         try:
@@ -525,6 +542,7 @@ class ImageExtractorApp(tk.Tk):
         else:
             messagebox.showwarning("定位提示", result.message, parent=self)
         self.refresh_preview()
+        self._focus_grid_area()
 
     def refresh_all_stats(self) -> None:
         try:
@@ -592,7 +610,34 @@ class ImageExtractorApp(tk.Tk):
         if focused == self.search_entry:
             return True
         widget_class = focused.winfo_class()
-        return widget_class in {"Entry", "TEntry", "Text"}
+        return widget_class in {"Entry", "TEntry", "Text", "Spinbox", "TSpinbox", "Combobox", "TCombobox"}
+
+    def _on_enter_key(self, _event: tk.Event) -> str | None:
+        if self._should_ignore_grid_key_event():
+            return None
+        try:
+            current = self.service.current_preview()
+        except DocumentError:
+            return "break"
+        if current is None:
+            return "break"
+        self.on_locate(current.id)
+        return "break"
+
+    def _on_space_key(self, _event: tk.Event) -> str | None:
+        if self._should_ignore_grid_key_event():
+            return None
+        try:
+            current = self.service.current_preview()
+        except DocumentError:
+            return "break"
+        if current is None:
+            return "break"
+        new_selected = not current.selected
+        self.on_check(current.id, new_selected)
+        self._rerender_visible_slots(force=True)
+        self.refresh_preview()
+        return "break"
 
     def _current_visible_index(self) -> int | None:
         try:
