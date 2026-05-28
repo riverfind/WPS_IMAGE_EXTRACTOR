@@ -1,0 +1,10 @@
+[project]
+name = "wps-image-extractor"
+version = "0.1.0"
+description = "Tkinter GUI tool for extracting and managing images inside docx/WPS documents."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pillow>=11.0.0",
+    "pywin32>=311",
+]
