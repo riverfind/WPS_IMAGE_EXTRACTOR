@@ -178,6 +178,7 @@ class ImageExtractorApp(tk.Tk):
         self._placeholder_thumbnail = ImageTk.PhotoImage(Image.new("RGBA", (170, 120), "#e5e7eb"))
 
         self._build_layout()
+        self._bind_keyboard_navigation()
         self.query_var.trace_add("write", lambda *_args: self.refresh_grid())
         self.after(50, self._poll_thumbnail_results)
 
@@ -211,7 +212,8 @@ class ImageExtractorApp(tk.Tk):
 
         ttk.Separator(left).pack(fill="x", pady=10)
         ttk.Label(left, text="搜索文件名 / MD5 / 部件").pack(anchor="w")
-        ttk.Entry(left, textvariable=self.query_var, width=26).pack(fill="x", pady=(6, 0))
+        self.search_entry = ttk.Entry(left, textvariable=self.query_var, width=26)
+        self.search_entry.pack(fill="x", pady=(6, 0))
 
         ttk.Label(
             left,
@@ -263,6 +265,14 @@ class ImageExtractorApp(tk.Tk):
         photo = ImageTk.PhotoImage(pil_image)
         target_cache[cache_key] = photo
         return photo
+
+    def _bind_keyboard_navigation(self) -> None:
+        self.bind_all("<Up>", lambda event: self._on_grid_key(event, "up"))
+        self.bind_all("<Down>", lambda event: self._on_grid_key(event, "down"))
+        self.bind_all("<Left>", lambda event: self._on_grid_key(event, "left"))
+        self.bind_all("<Right>", lambda event: self._on_grid_key(event, "right"))
+        self.bind_all("<Prior>", lambda event: self._on_grid_key(event, "page_up"))
+        self.bind_all("<Next>", lambda event: self._on_grid_key(event, "page_down"))
 
     def open_document(self) -> None:
         path = filedialog.askopenfilename(
@@ -545,6 +555,90 @@ class ImageExtractorApp(tk.Tk):
             except Exception:
                 pass
         self._slot_pool.clear()
+
+    def _on_grid_key(self, event: tk.Event, direction: str) -> str | None:
+        if self._should_ignore_grid_key_event():
+            return None
+        if not self._visible_images:
+            return "break"
+
+        current_index = self._current_visible_index()
+        if current_index is None:
+            current_index = 0
+
+        if direction == "left":
+            target_index = max(0, current_index - 1)
+        elif direction == "right":
+            target_index = min(len(self._visible_images) - 1, current_index + 1)
+        elif direction == "up":
+            target_index = max(0, current_index - self._grid_columns)
+        elif direction == "down":
+            target_index = min(len(self._visible_images) - 1, current_index + self._grid_columns)
+        elif direction == "page_up":
+            target_index = max(0, current_index - self._page_step())
+        elif direction == "page_down":
+            target_index = min(len(self._visible_images) - 1, current_index + self._page_step())
+        else:
+            return None
+
+        if target_index != current_index:
+            self._set_preview_by_index(target_index)
+        return "break"
+
+    def _should_ignore_grid_key_event(self) -> bool:
+        focused = self.focus_get()
+        if focused is None:
+            return False
+        if focused == self.search_entry:
+            return True
+        widget_class = focused.winfo_class()
+        return widget_class in {"Entry", "TEntry", "Text"}
+
+    def _current_visible_index(self) -> int | None:
+        try:
+            current = self.service.current_preview()
+        except DocumentError:
+            return None
+        if current is None:
+            return None
+        for index, image in enumerate(self._visible_images):
+            if image.id == current.id:
+                return index
+        return None
+
+    def _page_step(self) -> int:
+        row_span = self.CARD_HEIGHT + self.CARD_PAD_Y * 2
+        visible_rows = max(1, max(self.canvas.winfo_height(), 1) // row_span)
+        return max(1, visible_rows * self._grid_columns)
+
+    def _set_preview_by_index(self, index: int) -> None:
+        target = self._visible_images[index]
+        self.set_preview(target.id)
+        self._scroll_index_into_view(index)
+
+    def _scroll_index_into_view(self, index: int) -> None:
+        row_span = self.CARD_HEIGHT + self.CARD_PAD_Y * 2
+        row = index // self._grid_columns
+        target_top = row * row_span
+        target_bottom = target_top + row_span
+        viewport_height = max(self.canvas.winfo_height(), 1)
+        top_y = self.canvas.canvasy(0)
+        bottom_y = top_y + viewport_height
+        scrollregion = self.canvas.cget("scrollregion")
+        if not scrollregion:
+            return
+        try:
+            _, _, _, total_height = (float(value) for value in scrollregion.split())
+        except Exception:
+            return
+        if total_height <= viewport_height:
+            return
+        if target_top < top_y:
+            self.canvas.yview_moveto(target_top / total_height)
+        elif target_bottom > bottom_y:
+            desired_top = max(0.0, target_bottom - viewport_height)
+            self.canvas.yview_moveto(desired_top / total_height)
+        self._schedule_viewport_render(force=True)
 
     def _column_span(self) -> int:
         return self.CARD_WIDTH + self.CARD_PAD_X * 2
