@@ -268,19 +268,23 @@ class DocxAdapter:
                 except Exception:
                     pass
                 try:
-                    app.Selection.Collapse(1)
+                    if not exact_located and not text_located:
+                        app.Selection.Collapse(1)
                 except Exception:
                     pass
                 try:
-                    document.ActiveWindow.ScrollIntoView(app.Selection.Range, True)
+                    if not exact_located and not text_located:
+                        document.ActiveWindow.ScrollIntoView(app.Selection.Range, True)
                 except Exception:
                     pass
                 try:
-                    app.ActiveWindow.ScrollIntoView(app.Selection.Range, True)
+                    if not exact_located and not text_located:
+                        app.ActiveWindow.ScrollIntoView(app.Selection.Range, True)
                 except Exception:
                     pass
                 try:
-                    app.Selection.Range.Select()
+                    if not exact_located and not text_located:
+                        app.Selection.Range.Select()
                 except Exception:
                     pass
                 app.Visible = True
