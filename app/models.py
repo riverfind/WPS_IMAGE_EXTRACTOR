@@ -59,6 +59,10 @@ class DocumentSession:
     adapter_name: str
     duplicate_groups: dict[str, list[str]] = field(default_factory=dict)
     preview_image_id: str | None = None
+    query_text: str = ""
+    size_filter_mode: str = "exact"
+    size_filter_width: str = "*"
+    size_filter_height: str = "*"
 
     @property
     def total_images(self) -> int:

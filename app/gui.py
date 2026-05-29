@@ -138,6 +138,133 @@ class DeleteConfirmDialog(tk.Toplevel):
         self.destroy()
 
 
+class FilteredImagesDialog(tk.Toplevel):
+    def __init__(self, master: "ImageExtractorApp", images: list[ImageAsset]) -> None:
+        super().__init__(master)
+        self.app = master
+        self.images = images
+        self.preview_id = images[0].id if images else None
+        self.thumbnail_refs: dict[str, ImageTk.PhotoImage] = {}
+        self.preview_ref: ImageTk.PhotoImage | None = None
+
+        self.title("已过滤图片")
+        self.geometry("980x660")
+        self.minsize(860, 580)
+        self.transient(master)
+
+        self._build()
+        self._refresh()
+
+    def _build(self) -> None:
+        outer = ttk.Frame(self, padding=12)
+        outer.pack(fill="both", expand=True)
+
+        ttk.Label(outer, text=f"当前共有 {len(self.images)} 张已过滤图片", font=("Microsoft YaHei UI", 12, "bold")).pack(
+            anchor="w", pady=(0, 10)
+        )
+
+        body = ttk.Frame(outer)
+        body.pack(fill="both", expand=True)
+
+        left = ttk.Frame(body)
+        left.pack(side="left", fill="both", expand=True)
+
+        canvas = tk.Canvas(left, highlightthickness=0, bg="#f6f6f6")
+        scrollbar = ttk.Scrollbar(left, orient="vertical", command=canvas.yview)
+        self.cards_frame = ttk.Frame(canvas)
+        self.cards_frame.bind(
+            "<Configure>",
+            lambda event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=self.cards_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        right = ttk.LabelFrame(body, text="预览", padding=10)
+        right.pack(side="left", fill="y", padx=(12, 0))
+
+        self.preview_label = ttk.Label(right, text="单击缩略图预览\n双击缩略图定位", anchor="center")
+        self.preview_label.pack(fill="both", expand=True)
+
+        self.preview_info_var = tk.StringVar(value="")
+        ttk.Label(right, textvariable=self.preview_info_var, justify="left", wraplength=240).pack(fill="x", pady=(10, 0))
+
+        actions = ttk.Frame(outer)
+        actions.pack(fill="x", pady=(12, 0))
+        ttk.Label(actions, text="此窗口仅查看已过滤图片；若需恢复显示，请回到主窗口点击“恢复过滤”。").pack(side="left")
+        ttk.Button(actions, text="关闭", command=self.destroy).pack(side="right")
+
+    def _refresh(self) -> None:
+        for child in self.cards_frame.winfo_children():
+            child.destroy()
+
+        for index, image in enumerate(self.images):
+            card = tk.Frame(
+                self.cards_frame,
+                bg="#eaf4ff" if image.id == self.preview_id else "#ffffff",
+                bd=1,
+                relief="solid",
+                padx=6,
+                pady=6,
+            )
+            row = index // 3
+            column = index % 3
+            card.grid(row=row, column=column, padx=6, pady=6, sticky="nsew")
+
+            thumbnail = self.app.build_photo(image, (150, 110), self.thumbnail_refs)
+            image_label = tk.Label(card, image=thumbnail, bg=card["bg"], cursor="hand2")
+            image_label.pack()
+            image_label.bind("<Button-1>", lambda _event, image_id=image.id: self._set_preview(image_id))
+            image_label.bind("<Double-Button-1>", lambda _event, image_id=image.id: self._locate(image_id))
+
+            info = tk.Label(
+                card,
+                text=f"{image.name}\n{image.resolution_text}\n{image.size_kb} KB\nMD5: {image.md5[:12]}...",
+                justify="left",
+                bg=card["bg"],
+                anchor="w",
+            )
+            info.pack(fill="x", pady=(4, 0))
+            info.bind("<Button-1>", lambda _event, image_id=image.id: self._set_preview(image_id))
+            info.bind("<Double-Button-1>", lambda _event, image_id=image.id: self._locate(image_id))
+
+        self._refresh_preview()
+
+    def _refresh_preview(self) -> None:
+        current = next((image for image in self.images if image.id == self.preview_id), None)
+        if current is None:
+            self.preview_label.configure(text="没有可预览图片", image="")
+            self.preview_info_var.set("")
+            return
+
+        preview = self.app.build_photo(current, (300, 300), {"filtered-dialog-preview": None})
+        self.preview_ref = preview
+        self.preview_label.configure(image=preview, text="")
+        self.preview_info_var.set(
+            "\n".join(
+                [
+                    current.name,
+                    f"分辨率：{current.resolution_text}",
+                    f"大小：{current.size_kb} KB",
+                    f"MD5：{current.md5}",
+                    f"位置：{current.location.display_text}",
+                ]
+            )
+        )
+
+    def _set_preview(self, image_id: str) -> None:
+        self.preview_id = image_id
+        self._refresh()
+
+    def _locate(self, image_id: str) -> None:
+        result = self.app.locate_image(image_id)
+        if result.success:
+            messagebox.showinfo("定位结果", result.message, parent=self)
+        else:
+            messagebox.showwarning("定位提示", result.message, parent=self)
+
+
 class ImageExtractorApp(tk.Tk):
     GRID_COLUMNS = 4
     MIN_GRID_COLUMNS = 1
@@ -146,6 +273,7 @@ class ImageExtractorApp(tk.Tk):
     CARD_PAD_X = 10
     CARD_PAD_Y = 10
     OVERSCAN_ROWS = 2
+    SIZE_FILTER_MODE_MAP = {"精确": "exact", "最小": "min", "最大": "max"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -155,6 +283,9 @@ class ImageExtractorApp(tk.Tk):
 
         self.service = SessionService()
         self.query_var = tk.StringVar()
+        self.size_mode_var = tk.StringVar(value="精确")
+        self.width_filter_var = tk.StringVar(value="*")
+        self.height_filter_var = tk.StringVar(value="*")
         self.doc_name_var = tk.StringVar(value="未打开文档")
         self.total_var = tk.StringVar(value="总图片数：0")
         self.duplicate_var = tk.StringVar(value="重复组：0")
@@ -180,6 +311,8 @@ class ImageExtractorApp(tk.Tk):
         self._build_layout()
         self._bind_keyboard_navigation()
         self.query_var.trace_add("write", lambda *_args: self.refresh_grid())
+        self.width_filter_var.trace_add("write", lambda *_args: self.refresh_grid())
+        self.height_filter_var.trace_add("write", lambda *_args: self.refresh_grid())
         self.after(50, self._poll_thumbnail_results)
 
     def _build_layout(self) -> None:
@@ -196,6 +329,9 @@ class ImageExtractorApp(tk.Tk):
         ttk.Button(toolbar, text="删除所选...", command=self.delete_selected).pack(side="left", padx=(8, 0))
         ttk.Button(toolbar, text="过滤所选", command=self.filter_selected).pack(side="left", padx=(8, 0))
         ttk.Button(toolbar, text="恢复过滤", command=self.clear_filters).pack(side="left", padx=(8, 0))
+        ttk.Button(toolbar, text="查看已过滤...", command=self.view_filtered_images).pack(side="left", padx=(8, 0))
+        ttk.Button(toolbar, text="导出过滤MD5...", command=self.export_filtered_md5s).pack(side="left", padx=(8, 0))
+        ttk.Button(toolbar, text="导入过滤MD5...", command=self.import_filtered_md5s).pack(side="left", padx=(8, 0))
         ttk.Button(toolbar, text="导出所选...", command=self.export_selected).pack(side="left", padx=(8, 0))
 
         body = ttk.Frame(root)
@@ -214,6 +350,27 @@ class ImageExtractorApp(tk.Tk):
         ttk.Label(left, text="搜索文件名 / MD5 / 部件").pack(anchor="w")
         self.search_entry = ttk.Entry(left, textvariable=self.query_var, width=26)
         self.search_entry.pack(fill="x", pady=(6, 0))
+
+        ttk.Label(left, text="尺寸过滤").pack(anchor="w", pady=(12, 0))
+        self.size_mode_combo = ttk.Combobox(
+            left,
+            textvariable=self.size_mode_var,
+            values=list(self.SIZE_FILTER_MODE_MAP),
+            state="readonly",
+            width=26,
+        )
+        self.size_mode_combo.pack(fill="x", pady=(6, 0))
+        self.size_mode_combo.bind("<<ComboboxSelected>>", lambda _event: self.refresh_grid())
+
+        size_row = ttk.Frame(left)
+        size_row.pack(fill="x", pady=(6, 0))
+        ttk.Label(size_row, text="宽").pack(side="left")
+        self.width_filter_entry = ttk.Entry(size_row, textvariable=self.width_filter_var, width=10)
+        self.width_filter_entry.pack(side="left", padx=(6, 8))
+        ttk.Label(size_row, text="高").pack(side="left")
+        self.height_filter_entry = ttk.Entry(size_row, textvariable=self.height_filter_var, width=10)
+        self.height_filter_entry.pack(side="left", padx=(6, 0))
+        ttk.Label(left, text="输入正整数或 *，* 表示该维度不参与").pack(anchor="w", pady=(4, 0))
 
         ttk.Label(
             left,
@@ -265,6 +422,21 @@ class ImageExtractorApp(tk.Tk):
         photo = ImageTk.PhotoImage(pil_image)
         target_cache[cache_key] = photo
         return photo
+
+    def _sync_filter_state(self) -> bool:
+        if self.service.session is None:
+            return True
+        try:
+            mode = self.SIZE_FILTER_MODE_MAP.get(self.size_mode_var.get().strip())
+            if mode is None:
+                raise DocumentError("尺寸过滤模式无效。")
+            self.service.set_text_query(self.query_var.get())
+            self.service.set_size_filter(mode, self.width_filter_var.get(), self.height_filter_var.get())
+        except DocumentError as exc:
+            self.status_var.set(f"筛选条件无效：{exc}")
+            messagebox.showwarning("筛选条件无效", str(exc), parent=self)
+            return False
+        return True
 
     def _focus_grid_area(self) -> None:
         if self.canvas.winfo_exists():
@@ -331,6 +503,8 @@ class ImageExtractorApp(tk.Tk):
             session = self.service.require_session()
         except DocumentError:
             return
+        if not self._sync_filter_state():
+            return
 
         self.doc_name_var.set(session.document_path.name)
         self.total_var.set(f"总图片数：{session.total_images}")
@@ -339,7 +513,7 @@ class ImageExtractorApp(tk.Tk):
         self.filtered_var.set(f"已过滤：{session.hidden_count}")
 
         preview = self.service.current_preview()
-        visible = self.service.visible_images(self.query_var.get())
+        visible = self.service.visible_images()
         visible_ids = {image.id for image in visible}
         if visible and (preview is None or preview.hidden or preview.id not in visible_ids):
             self.service.set_preview(visible[0].id)
@@ -348,8 +522,13 @@ class ImageExtractorApp(tk.Tk):
 
     def refresh_grid(self) -> None:
         try:
-            self._visible_images = self.service.visible_images(self.query_var.get())
             session = self.service.require_session()
+        except DocumentError:
+            return
+        if not self._sync_filter_state():
+            return
+        try:
+            self._visible_images = self.service.visible_images()
         except DocumentError:
             return
 
@@ -425,8 +604,10 @@ class ImageExtractorApp(tk.Tk):
         self._focus_grid_area()
 
     def select_all(self) -> None:
+        if not self._sync_filter_state():
+            return
         try:
-            self.service.select_all_visible(self.query_var.get())
+            self.service.select_all_visible()
         except DocumentError as exc:
             messagebox.showwarning("提示", str(exc), parent=self)
             return
@@ -436,8 +617,10 @@ class ImageExtractorApp(tk.Tk):
         self._focus_grid_area()
 
     def invert_selection(self) -> None:
+        if not self._sync_filter_state():
+            return
         try:
-            self.service.invert_visible(self.query_var.get())
+            self.service.invert_visible()
         except DocumentError as exc:
             messagebox.showwarning("提示", str(exc), parent=self)
             return
@@ -475,6 +658,86 @@ class ImageExtractorApp(tk.Tk):
             messagebox.showwarning("提示", str(exc), parent=self)
             return
         self.status_var.set("已恢复全部过滤项。")
+        self.refresh_all()
+        self._focus_grid_area()
+
+    def view_filtered_images(self) -> None:
+        try:
+            filtered = self.service.filtered_images()
+        except DocumentError as exc:
+            messagebox.showwarning("提示", str(exc), parent=self)
+            return
+        if not filtered:
+            messagebox.showwarning("提示", "当前没有已过滤图片。", parent=self)
+            return
+
+        dialog = FilteredImagesDialog(self, filtered)
+        self.wait_window(dialog)
+        self._focus_grid_area()
+
+    def export_filtered_md5s(self) -> None:
+        try:
+            filtered = self.service.filtered_images()
+        except DocumentError as exc:
+            messagebox.showwarning("提示", str(exc), parent=self)
+            return
+        if not filtered:
+            messagebox.showwarning("提示", "当前没有已过滤图片。", parent=self)
+            return
+
+        try:
+            document_name = self.service.require_session().document_path.stem
+        except DocumentError as exc:
+            messagebox.showwarning("提示", str(exc), parent=self)
+            return
+
+        target = filedialog.asksaveasfilename(
+            title="导出已过滤图片 MD5",
+            defaultextension=".txt",
+            initialfile=f"{document_name}_filtered_md5.txt",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
+        )
+        if not target:
+            return
+
+        try:
+            count = self.service.export_filtered_md5s(Path(target))
+        except (DocumentError, OSError) as exc:
+            messagebox.showerror("导出失败", str(exc), parent=self)
+            self.status_var.set(f"导出过滤 MD5 失败：{exc}")
+            return
+
+        self.status_var.set(f"已导出 {count} 条过滤 MD5 到 {Path(target).name}")
+        messagebox.showinfo("导出完成", f"已导出 {count} 条 MD5。\n文件：{target}", parent=self)
+        self._focus_grid_area()
+
+    def import_filtered_md5s(self) -> None:
+        try:
+            self.service.require_session()
+        except DocumentError as exc:
+            messagebox.showwarning("提示", str(exc), parent=self)
+            return
+
+        source = filedialog.askopenfilename(
+            title="导入过滤 MD5",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
+        )
+        if not source:
+            return
+
+        try:
+            hidden_count, matched_md5_count = self.service.import_filtered_md5s(Path(source))
+        except DocumentError as exc:
+            messagebox.showerror("导入失败", str(exc), parent=self)
+            self.status_var.set(f"导入过滤 MD5 失败：{exc}")
+            return
+
+        self.status_var.set(f"已按导入 MD5 过滤 {hidden_count} 张图片，命中 {matched_md5_count} 个 MD5。")
+        messagebox.showinfo(
+            "导入完成",
+            f"本次新过滤图片：{hidden_count} 张\n命中 MD5：{matched_md5_count} 个\n文件：{source}",
+            parent=self,
+        )
         self.refresh_all()
         self._focus_grid_area()
 

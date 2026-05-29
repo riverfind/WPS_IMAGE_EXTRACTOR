@@ -40,19 +40,39 @@ class SessionService:
             raise DocumentError("请先打开一个文档。")
         return self.session
 
-    def visible_images(self, query: str = "") -> list[ImageAsset]:
+    def visible_images(self) -> list[ImageAsset]:
         session = self.require_session()
-        normalized = query.strip().lower()
-        images = [image for image in session.images if not image.hidden]
-        if not normalized:
-            return images
+        normalized_query = session.query_text.strip().lower()
         return [
             image
-            for image in images
-            if normalized in image.name.lower()
-            or normalized in image.md5.lower()
-            or normalized in image.location.part_name.lower()
+            for image in session.images
+            if not image.hidden
+            and self._matches_query(image, normalized_query)
+            and self._matches_size_filter(
+                image,
+                session.size_filter_mode,
+                session.size_filter_width,
+                session.size_filter_height,
+            )
         ]
+
+    def set_text_query(self, query: str) -> None:
+        session = self.require_session()
+        session.query_text = query
+
+    def set_size_filter(self, mode: str, width: str, height: str) -> None:
+        session = self.require_session()
+        if mode not in {"exact", "min", "max"}:
+            raise DocumentError("尺寸过滤模式无效。")
+        session.size_filter_mode = mode
+        session.size_filter_width = self._normalize_size_token(width)
+        session.size_filter_height = self._normalize_size_token(height)
+
+    def clear_size_filter(self) -> None:
+        session = self.require_session()
+        session.size_filter_mode = "exact"
+        session.size_filter_width = "*"
+        session.size_filter_height = "*"
 
     def set_preview(self, image_id: str) -> ImageAsset:
         session = self.require_session()
@@ -75,12 +95,12 @@ class SessionService:
             raise DocumentError("未找到要勾选的图片。")
         image.selected = selected
 
-    def select_all_visible(self, query: str = "") -> None:
-        for image in self.visible_images(query):
+    def select_all_visible(self) -> None:
+        for image in self.visible_images():
             image.selected = True
 
-    def invert_visible(self, query: str = "") -> None:
-        for image in self.visible_images(query):
+    def invert_visible(self) -> None:
+        for image in self.visible_images():
             image.selected = not image.selected
 
     def clear_selection(self) -> None:
@@ -111,6 +131,7 @@ class SessionService:
         for image in session.images:
             if image.selected and not image.hidden:
                 image.hidden = True
+                image.selected = False
                 hidden_count += 1
         return hidden_count
 
@@ -119,9 +140,13 @@ class SessionService:
         for image in session.images:
             image.hidden = False
 
+    def filtered_images(self) -> list[ImageAsset]:
+        session = self.require_session()
+        return [image for image in session.images if image.hidden]
+
     def selected_images(self) -> list[ImageAsset]:
         session = self.require_session()
-        return [image for image in session.images if image.selected]
+        return [image for image in session.images if image.selected and not image.hidden]
 
     def export_selected(self, output_dir: Path) -> tuple[int, int]:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -138,6 +163,36 @@ class SessionService:
                 success += 1
 
         return success, failed
+
+    def export_filtered_md5s(self, output_path: Path) -> int:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        md5s = list(dict.fromkeys(image.md5 for image in self.filtered_images()))
+        output_path.write_text("\n".join(md5s), encoding="utf-8")
+        return len(md5s)
+
+    def import_filtered_md5s(self, input_path: Path) -> tuple[int, int]:
+        try:
+            content = input_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise DocumentError(f"读取 MD5 文件失败：{exc}") from exc
+
+        md5s = {line.strip().lower() for line in content.splitlines() if line.strip()}
+        if not md5s:
+            raise DocumentError("导入文件中没有有效的 MD5。")
+
+        session = self.require_session()
+        hidden_count = 0
+        matched_md5s: set[str] = set()
+        for image in session.images:
+            image_md5 = image.md5.lower()
+            if image_md5 not in md5s:
+                continue
+            matched_md5s.add(image_md5)
+            if not image.hidden:
+                image.hidden = True
+                image.selected = False
+                hidden_count += 1
+        return hidden_count, len(matched_md5s)
 
     def delete_selected(self) -> tuple[Path, int]:
         if self.adapter is None:
@@ -184,6 +239,42 @@ class SessionService:
         for image in images:
             groups[image.md5].append(image.id)
         return {md5: image_ids for md5, image_ids in groups.items() if len(image_ids) > 1}
+
+    def _matches_query(self, image: ImageAsset, normalized_query: str) -> bool:
+        if not normalized_query:
+            return True
+        return (
+            normalized_query in image.name.lower()
+            or normalized_query in image.md5.lower()
+            or normalized_query in image.location.part_name.lower()
+        )
+
+    def _normalize_size_token(self, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or normalized == "*":
+            return "*"
+        if not normalized.isdigit():
+            raise DocumentError("宽和高只能填写正整数或 *。")
+        parsed = int(normalized)
+        if parsed <= 0:
+            raise DocumentError("宽和高只能填写正整数或 *。")
+        return str(parsed)
+
+    def _matches_size_filter(self, image: ImageAsset, mode: str, width: str, height: str) -> bool:
+        if width != "*" and not self._compare_dimension(image.width, int(width), mode):
+            return False
+        if height != "*" and not self._compare_dimension(image.height, int(height), mode):
+            return False
+        return True
+
+    def _compare_dimension(self, actual: int, expected: int, mode: str) -> bool:
+        if mode == "exact":
+            return actual == expected
+        if mode == "min":
+            return actual >= expected
+        if mode == "max":
+            return actual <= expected
+        raise DocumentError("尺寸过滤模式无效。")
 
     def _unique_output_path(self, output_dir: Path, file_name: str) -> Path:
         base = Path(file_name).stem
