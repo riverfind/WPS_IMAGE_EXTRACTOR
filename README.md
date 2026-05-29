@@ -216,3 +216,12 @@ uv run python main.py
 ```bash
 uv run python main.py
 ```
+
+GUI 模块结构：
+
+- `app/gui_legacy.py`：重构前的旧 GUI 实现快照，仅保留作对照，不进入当前调用链
+- `app/gui/__init__.py`：新的 GUI 公共入口，供 `main.py` 通过 `from app.gui import run` 调用
+- `app/gui/app.py`：主窗口壳层、布局装配、启动入口
+- `app/gui/actions.py`：文档操作、选择/过滤/导入导出/删除等界面动作
+- `app/gui/grid.py`：键盘导航、虚拟缩略图网格、缩略图异步刷新
+- `app/gui/dialogs.py`：删除确认窗口、已过滤图片查看窗口
