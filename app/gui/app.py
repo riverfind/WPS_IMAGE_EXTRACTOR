@@ -49,6 +49,7 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         self._visible_images: list[ImageAsset] = []
         self._slot_pool: list[dict[str, object]] = []
         self._viewport_after_id: str | None = None
+        self._filter_refresh_after_id: str | None = None
         self._empty_label_id: int | None = None
         self._last_render_range: tuple[int, int] | None = None
         self._thumbnail_result_queue: queue.Queue[tuple[int, str, Image.Image]] = queue.Queue()
@@ -60,9 +61,9 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
 
         self._build_layout()
         self._bind_keyboard_navigation()
-        self.query_var.trace_add("write", lambda *_args: self.refresh_grid())
-        self.width_filter_var.trace_add("write", lambda *_args: self.refresh_grid())
-        self.height_filter_var.trace_add("write", lambda *_args: self.refresh_grid())
+        self.query_var.trace_add("write", lambda *_args: self._schedule_filter_refresh())
+        self.width_filter_var.trace_add("write", lambda *_args: self._schedule_filter_refresh())
+        self.height_filter_var.trace_add("write", lambda *_args: self._schedule_filter_refresh())
         self.after(50, self._poll_thumbnail_results)
 
     def _build_layout(self) -> None:
@@ -110,7 +111,7 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
             width=26,
         )
         self.size_mode_combo.pack(fill="x", pady=(6, 0))
-        self.size_mode_combo.bind("<<ComboboxSelected>>", lambda _event: self.refresh_grid())
+        self.size_mode_combo.bind("<<ComboboxSelected>>", lambda _event: self._schedule_filter_refresh(delay_ms=0))
 
         size_row = ttk.Frame(left)
         size_row.pack(fill="x", pady=(6, 0))
@@ -191,6 +192,15 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
     def _focus_grid_area(self) -> None:
         if self.canvas.winfo_exists():
             self.after_idle(self.canvas.focus_set)
+
+    def _schedule_filter_refresh(self, delay_ms: int = 150) -> None:
+        if self._filter_refresh_after_id is not None:
+            self.after_cancel(self._filter_refresh_after_id)
+        self._filter_refresh_after_id = self.after(delay_ms, self._apply_filter_refresh)
+
+    def _apply_filter_refresh(self) -> None:
+        self._filter_refresh_after_id = None
+        self.refresh_grid(recompute_visible=True, reset_x=False, force=False)
 
 
 def run() -> None:

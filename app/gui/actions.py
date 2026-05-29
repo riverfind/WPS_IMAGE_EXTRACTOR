@@ -33,7 +33,7 @@ class ImageExtractorActionsMixin:
 
         self._reset_document_view_state()
         self.status_var.set(f"已打开 {session.document_path.name}，共提取 {session.total_images} 张图片。")
-        self.refresh_all()
+        self.refresh_all(reset_grid_x=True, force_grid=True)
         self._focus_grid_area()
 
     def reload_document(self) -> None:
@@ -52,10 +52,10 @@ class ImageExtractorActionsMixin:
 
         self._reset_document_view_state()
         self.status_var.set(f"已重新加载 {session.document_path.name}，共提取 {session.total_images} 张图片。")
-        self.refresh_all()
+        self.refresh_all(reset_grid_x=True, force_grid=True)
         self._focus_grid_area()
 
-    def refresh_all(self) -> None:
+    def refresh_all(self, *, reset_grid_x: bool = False, force_grid: bool = True) -> None:
         try:
             session = self.service.require_session()
         except DocumentError:
@@ -74,24 +74,33 @@ class ImageExtractorActionsMixin:
         visible_ids = {image.id for image in visible}
         if visible and (preview is None or preview.hidden or preview.id not in visible_ids):
             self.service.set_preview(visible[0].id)
-        self.refresh_grid()
+        self.refresh_grid(recompute_visible=True, reset_x=reset_grid_x, force=force_grid)
         self.refresh_preview()
 
-    def refresh_grid(self) -> None:
+    def refresh_grid(self, *, recompute_visible: bool = True, reset_x: bool = False, force: bool = False) -> None:
         try:
             session = self.service.require_session()
         except DocumentError:
             return
-        if not self._sync_filter_state():
-            return
-        try:
-            self._visible_images = self.service.visible_images()
-        except DocumentError:
+        if recompute_visible and not self._sync_filter_state():
             return
 
-        self._thumbnail_generation += 1
-        self._thumbnail_pending.clear()
-        self._last_render_range = None
+        visible_changed = False
+        if recompute_visible:
+            previous_ids = [image.id for image in self._visible_images]
+            try:
+                new_visible_images = self.service.visible_images()
+            except DocumentError:
+                return
+            new_ids = [image.id for image in new_visible_images]
+            visible_changed = new_ids != previous_ids
+            self._visible_images = new_visible_images
+
+        if visible_changed:
+            self._thumbnail_generation += 1
+            self._thumbnail_pending.clear()
+            self._last_render_range = None
+
         self.selection_var.set(f"已选：{session.selected_count}")
         self.filtered_var.set(f"已过滤：{session.hidden_count}")
 
@@ -105,9 +114,9 @@ class ImageExtractorActionsMixin:
             self._empty_label_id = self.canvas.create_text(40, 40, anchor="nw", text="当前没有可显示的图片。")
             return
 
-        self._update_grid_layout_metrics(reset_x=True)
+        self._update_grid_layout_metrics(reset_x=reset_x)
         self._ensure_slot_pool()
-        self._schedule_viewport_render(force=True)
+        self._schedule_viewport_render(force=force or visible_changed)
 
     def refresh_preview(self) -> None:
         try:
@@ -146,7 +155,7 @@ class ImageExtractorActionsMixin:
         except DocumentError as exc:
             messagebox.showerror("预览失败", str(exc), parent=self)
             return
-        self._rerender_visible_slots(force=True)
+        self._refresh_visible_slot_styles()
         self.refresh_preview()
         self._focus_grid_area()
 
@@ -158,6 +167,7 @@ class ImageExtractorActionsMixin:
             messagebox.showerror("勾选失败", str(exc), parent=self)
             return
         self.selection_var.set(f"已选：{session.selected_count}")
+        self._refresh_visible_slot_styles()
         self._focus_grid_area()
 
     def select_all(self) -> None:
@@ -169,7 +179,7 @@ class ImageExtractorActionsMixin:
             messagebox.showwarning("提示", str(exc), parent=self)
             return
         self.status_var.set("已选中当前可见图片。")
-        self._rerender_visible_slots(force=True)
+        self._refresh_visible_slot_styles()
         self.refresh_all_stats()
         self._focus_grid_area()
 
@@ -182,7 +192,7 @@ class ImageExtractorActionsMixin:
             messagebox.showwarning("提示", str(exc), parent=self)
             return
         self.status_var.set("已对当前可见图片执行反选。")
-        self._rerender_visible_slots(force=True)
+        self._refresh_visible_slot_styles()
         self.refresh_all_stats()
         self._focus_grid_area()
 
@@ -195,7 +205,7 @@ class ImageExtractorActionsMixin:
             return
         self.selection_var.set(f"已选：{session.selected_count}")
         self.status_var.set(f"已通过重复组入口选中 {count} 张相同图片。")
-        self._rerender_visible_slots(force=True)
+        self._refresh_visible_slot_styles()
         self._focus_grid_area()
 
     def filter_selected(self) -> None:
@@ -205,7 +215,7 @@ class ImageExtractorActionsMixin:
             messagebox.showwarning("提示", str(exc), parent=self)
             return
         self.status_var.set(f"已隐藏 {count} 张选中图片。")
-        self.refresh_all()
+        self.refresh_all(reset_grid_x=False, force_grid=True)
         self._focus_grid_area()
 
     def clear_filters(self) -> None:
@@ -215,7 +225,7 @@ class ImageExtractorActionsMixin:
             messagebox.showwarning("提示", str(exc), parent=self)
             return
         self.status_var.set("已恢复全部过滤项。")
-        self.refresh_all()
+        self.refresh_all(reset_grid_x=False, force_grid=True)
         self._focus_grid_area()
 
     def view_filtered_images(self) -> None:
@@ -295,7 +305,7 @@ class ImageExtractorActionsMixin:
             f"本次新过滤图片：{hidden_count} 张\n命中 MD5：{matched_md5_count} 个\n文件：{source}",
             parent=self,
         )
-        self.refresh_all()
+        self.refresh_all(reset_grid_x=False, force_grid=True)
         self._focus_grid_area()
 
     def export_selected(self) -> None:
@@ -346,7 +356,7 @@ class ImageExtractorActionsMixin:
             f"已删除 {deleted_count} 张图片。\n已生成备份：{backup_path}",
             parent=self,
         )
-        self.refresh_all()
+        self.refresh_all(reset_grid_x=True, force_grid=True)
         self._focus_grid_area()
 
     def locate_image(self, image_id: str) -> NavigationResult:

@@ -82,8 +82,6 @@ class ImageExtractorGridMixin:
             return "break"
         new_selected = not current.selected
         self.on_check(current.id, new_selected)
-        self._rerender_visible_slots(force=True)
-        self.refresh_preview()
         return "break"
 
     def _current_visible_index(self) -> int | None:
@@ -226,6 +224,26 @@ class ImageExtractorGridMixin:
             self.after_cancel(self._viewport_after_id)
         self._viewport_after_id = self.after(16, lambda: self._rerender_visible_slots(force=force))
 
+    def _refresh_visible_slot_styles(self) -> None:
+        if not self._slot_pool or not self._visible_images:
+            return
+
+        visible_by_id = {image.id: image for image in self._visible_images}
+        try:
+            current_preview = self.service.current_preview()
+        except DocumentError:
+            return
+        current_preview_id = current_preview.id if current_preview is not None else None
+
+        for slot in self._slot_pool:
+            image_id = slot.get("image_id")
+            if not image_id:
+                continue
+            image = visible_by_id.get(image_id)
+            if image is None:
+                continue
+            self._bind_slot(slot, image, current_preview_id)
+
     def _rerender_visible_slots(self, force: bool = False) -> None:
         self._viewport_after_id = None
         if not self._visible_images:
@@ -260,11 +278,10 @@ class ImageExtractorGridMixin:
             x = column * self._column_span() + self.CARD_PAD_X
             y = row * (self.CARD_HEIGHT + self.CARD_PAD_Y * 2) + self.CARD_PAD_Y
             window_id = slot["window_id"]
-            if slot.get("image_id") != image.id:
-                self.canvas.itemconfigure(window_id, state="hidden")
             self.canvas.coords(window_id, x, y)
             self._bind_slot(slot, image, current_preview_id)
-            self.canvas.itemconfigure(window_id, state="normal")
+            if str(self.canvas.itemcget(window_id, "state")) != "normal":
+                self.canvas.itemconfigure(window_id, state="normal")
 
         for slot in self._slot_pool[len(visible_slice):]:
             self.canvas.itemconfigure(slot["window_id"], state="hidden")
