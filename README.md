@@ -1,8 +1,15 @@
 # WPS Image Extractor
 
-`WPS Image Extractor` 是一个面向 Windows 的桌面工具，用于从 Word/WPS 文档中提取图片，并以缩略图方式进行浏览、筛选、导出、删除和定位。
+`WPS Image Extractor`（打包版可执行文件名为 `WIE.exe`）是一个面向 Windows 的桌面工具，用于从 Word/WPS 文档中提取图片，并以缩略图方式进行浏览、筛选、导出、删除和定位。
 
-如果你经常需要从操作手册、配置文档、实施文档中批量整理图片，这个工具可以比手工翻文档更快完成工作。
+如果你经常需要从操作手册、配置文档、实施文档里批量整理截图，这个工具可以帮你把“翻文档找图、筛图、导图、删图”的过程尽量收敛到一个窗口里完成。
+
+它更适合这几类用户：
+
+- 需要从 `.docx` 文档中批量导出截图或插图的人
+- 需要清理文档里重复图片、无用图片的人
+- 想先看缩略图再决定删除/导出，避免误操作的人
+- 需要快速回到图片在原文位置继续核对的人
 
 ## 产品亮点
 
@@ -38,7 +45,18 @@
 - 图片定位功能依赖 WPS/Word 的 COM 自动化能力
 - 若未安装 WPS/Word，仍可使用提取、预览、筛选、导出、删除等功能
 
-## 安装与启动
+## 直接使用
+
+如果你拿到的是打包产物，直接运行：
+
+- `dist/nuitka/main.dist/WIE.exe`
+
+使用前建议：
+
+- 如果你需要“双击定位到文档中的图片”，请先安装 WPS Writer 或 Microsoft Word
+- 如果你只需要提取、预览、筛选、导出、删除图片，没有安装 WPS/Word 也可以使用
+
+## 从源码运行
 
 本项目使用 `uv` 管理环境。
 
@@ -54,16 +72,48 @@ uv sync
 uv run python main.py
 ```
 
+## 打包为 exe
+
+Nuitka 作为构建工具使用，按当前项目约定建议通过 `uv pip install` 安装开发依赖：
+
+```bash
+uv pip install nuitka ordered-set zstandard
+```
+
+项目已提供 Windows 打包脚本：
+
+```powershell
+.\scripts\build_nuitka.ps1
+```
+
+脚本等价于执行以下核心命令：
+
+```bash
+uv run python -m nuitka --standalone --windows-console-mode=disable --output-filename=WIE.exe --output-dir=dist/nuitka --assume-yes-for-downloads --enable-plugin=tk-inter --include-package=app --follow-imports --remove-output main.py
+```
+
+打包结果默认输出到：
+
+- `dist/nuitka/main.dist/`
+- 可执行文件位于 `dist/nuitka/main.dist/WIE.exe`
+
+说明：
+
+- 当前打包目标是 Windows 单目录版本，不是单文件 exe
+- 打包后默认隐藏控制台窗口，更适合桌面 GUI 应用分发
+- 若首次构建较慢，通常是 Nuitka 在准备编译工具链或下载依赖
+- 若项目路径包含中文或其他非 ASCII 字符，脚本会先在系统临时目录中进行中转构建，再把产物复制回 `dist/nuitka`
+
 ## 快速上手
 
 1. 点击 `打开 WPS 文档...`
 2. 选择要处理的 `.docx` 文档
-3. 在中间缩略图区浏览图片
-4. 单击缩略图查看预览
-5. 勾选需要处理的图片
-6. 如需缩小范围，可在左侧输入宽高条件执行尺寸过滤
+3. 在中间缩略图区快速浏览文档里的所有图片
+4. 单击缩略图查看大图预览
+5. 勾选你真正想处理的图片
+6. 如需缩小范围，可先用左侧搜索或尺寸过滤把候选图片收窄
 7. 根据需要执行 `导出所选...`、`过滤所选` 或 `删除所选...`
-8. 如果希望复用过滤结果，可执行 `导出过滤MD5...`
+8. 如果这批过滤规则下次还要继续用，可执行 `导出过滤MD5...`
 9. 下次处理同类文档时，可通过 `导入过滤MD5...` 直接批量过滤
 
 如果删除或外部修改了文档内容，可以点击 `重新加载` 强制刷新当前文档视图。
@@ -187,6 +237,13 @@ uv run python main.py
 
 - 请先确认本机已安装 WPS Writer 或 Microsoft Word
 - 再确认目标文档当前未处于异常占用状态
+
+### 打包后的 exe 启动失败怎么办？
+
+- 先确认是否使用了 `scripts/build_nuitka.ps1` 或 README 中给出的 Nuitka 参数
+- 再确认构建环境中 `nuitka`、`ordered-set`、`zstandard` 已安装
+- 如果问题与定位功能有关，请优先检查本机的 WPS/Word 与 pywin32/COM 环境
+- 若被安全软件拦截，请先将构建目录加入信任或在隔离环境中重试
 
 ### 小窗口下看不全怎么办？
 

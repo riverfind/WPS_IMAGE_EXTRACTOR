@@ -14,3 +14,6 @@ File/
 assets/
 docs/
 .trae/
+dist/
+.uploads/
+nuitka-crash-report.xml
