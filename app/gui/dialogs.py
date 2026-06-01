@@ -1,15 +1,128 @@
 from __future__ import annotations
 
+import io
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import TYPE_CHECKING
 
-from PIL import ImageTk
+from PIL import Image, ImageTk
 
 from app.models import ImageAsset
 
 if TYPE_CHECKING:
     from .app import ImageExtractorApp
+
+
+class ImageViewerDialog(tk.Toplevel):
+    MIN_SCALE = 0.1
+    MAX_SCALE = 8.0
+    SCALE_STEP = 1.15
+
+    def __init__(self, master: "ImageExtractorApp", image: ImageAsset) -> None:
+        super().__init__(master)
+        self.app = master
+        self.current_image = image
+        self.original_image: Image.Image | None = None
+        self.photo_ref: ImageTk.PhotoImage | None = None
+        self.scale = 1.0
+        self.image_item_id: int | None = None
+
+        self.title("图片查看器")
+        self.geometry("980x760")
+        self.minsize(420, 320)
+        self.transient(master)
+
+        self._build()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.set_image(image)
+
+    def _build(self) -> None:
+        outer = ttk.Frame(self, padding=10)
+        outer.pack(fill="both", expand=True)
+
+        self.info_var = tk.StringVar(value="")
+        ttk.Label(outer, textvariable=self.info_var, justify="left").pack(anchor="w", pady=(0, 8))
+
+        canvas_frame = ttk.Frame(outer)
+        canvas_frame.pack(fill="both", expand=True)
+
+        self.canvas = tk.Canvas(canvas_frame, bg="#111827", highlightthickness=0)
+        self.v_scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=self.canvas.yview)
+        self.h_scrollbar = ttk.Scrollbar(canvas_frame, orient="horizontal", command=self.canvas.xview)
+        self.canvas.configure(yscrollcommand=self.v_scrollbar.set, xscrollcommand=self.h_scrollbar.set)
+
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.v_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.h_scrollbar.grid(row=1, column=0, sticky="ew")
+        canvas_frame.grid_rowconfigure(0, weight=1)
+        canvas_frame.grid_columnconfigure(0, weight=1)
+
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind("<Configure>", lambda _event: self._redraw())
+
+    def set_image(self, image: ImageAsset) -> None:
+        self.current_image = image
+        self.scale = 1.0
+        try:
+            with Image.open(io.BytesIO(image.image_bytes)) as source:
+                self.original_image = source.convert("RGBA")
+        except Exception:
+            self.original_image = None
+            self.photo_ref = None
+            self.canvas.delete("all")
+            self.canvas.configure(scrollregion=(0, 0, 0, 0))
+            self.title("图片查看器 - 加载失败")
+            self.info_var.set(f"{image.name}\n分辨率：{image.resolution_text}\n图片加载失败")
+            return
+        self._redraw()
+
+    def _on_mousewheel(self, event: tk.Event) -> None:
+        if self.original_image is None:
+            return
+        delta = getattr(event, "delta", 0)
+        if delta == 0:
+            return
+        next_scale = self.scale * self.SCALE_STEP if delta > 0 else self.scale / self.SCALE_STEP
+        next_scale = max(self.MIN_SCALE, min(self.MAX_SCALE, next_scale))
+        if abs(next_scale - self.scale) < 1e-6:
+            return
+        self.scale = next_scale
+        self._redraw()
+
+    def _redraw(self) -> None:
+        if self.original_image is None:
+            return
+
+        width = max(1, round(self.original_image.width * self.scale))
+        height = max(1, round(self.original_image.height * self.scale))
+        resized = self.original_image.resize((width, height), Image.Resampling.LANCZOS)
+        self.photo_ref = ImageTk.PhotoImage(resized)
+
+        self.canvas.delete("all")
+        self.image_item_id = self.canvas.create_image(0, 0, anchor="nw", image=self.photo_ref)
+        self.canvas.configure(scrollregion=(0, 0, width, height))
+
+        canvas_width = max(1, self.canvas.winfo_width())
+        canvas_height = max(1, self.canvas.winfo_height())
+        x = max(0, (canvas_width - width) // 2)
+        y = max(0, (canvas_height - height) // 2)
+        self.canvas.coords(self.image_item_id, x, y)
+        self.canvas.configure(scrollregion=(0, 0, max(width, canvas_width), max(height, canvas_height)))
+
+        self.title(f"图片查看器 - {self.current_image.name}")
+        self.info_var.set(
+            "\n".join(
+                [
+                    self.current_image.name,
+                    f"分辨率：{self.current_image.resolution_text}",
+                    f"缩放：{round(self.scale * 100)}%",
+                ]
+            )
+        )
+
+    def _on_close(self) -> None:
+        self.app.image_viewer = None
+        self.destroy()
 
 
 class DeleteConfirmDialog(tk.Toplevel):

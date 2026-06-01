@@ -282,3 +282,13 @@ GUI 模块结构：
 - `app/gui/actions.py`：文档操作、选择/过滤/导入导出/删除等界面动作
 - `app/gui/grid.py`：键盘导航、虚拟缩略图网格、缩略图异步刷新
 - `app/gui/dialogs.py`：删除确认窗口、已过滤图片查看窗口
+
+文档适配器结构：
+
+- `app/docx_adapter_legacy.py`：拆分前的旧单文件适配器实现快照，仅保留作对照
+- `app/docx_adapter/__init__.py`：适配器公共入口，保持 `from app.docx_adapter import ...` 导入方式不变
+- `app/docx_adapter/adapter.py`：`DocxAdapter` 主类，负责提取图片与删除写回
+- `app/docx_adapter/xml_ops.py`：OOXML 解析、图片引用遍历、稳定 ID 与文本上下文提取
+- `app/docx_adapter/office.py`：WPS/Word COM 自动化定位与打开状态检查
+- `app/docx_adapter/errors.py`：错误类型与导航结果对象
+- `app/docx_adapter/constants.py`：命名空间常量与 ZIP/XML 路径辅助函数

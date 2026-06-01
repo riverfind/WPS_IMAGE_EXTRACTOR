@@ -4,8 +4,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 
 from app.docx_adapter import DocumentError, NavigationResult, UnsupportedDocumentError
+from app.models import ImageAsset
 
-from .dialogs import DeleteConfirmDialog, FilteredImagesDialog
+from .dialogs import DeleteConfirmDialog, FilteredImagesDialog, ImageViewerDialog
 
 
 class ImageExtractorActionsMixin:
@@ -148,6 +149,29 @@ class ImageExtractorActionsMixin:
                 ]
             )
         )
+
+    def open_preview_viewer_from_panel(self) -> None:
+        try:
+            current = self.service.current_preview()
+        except DocumentError as exc:
+            messagebox.showwarning("提示", str(exc), parent=self)
+            return
+        if current is None:
+            messagebox.showwarning("提示", "当前没有可查看的预览图片。", parent=self)
+            return
+        viewer = self._get_or_create_image_viewer(current)
+        viewer.deiconify()
+        viewer.lift()
+        viewer.focus_force()
+
+    def _get_or_create_image_viewer(self, image: ImageAsset) -> ImageViewerDialog:
+        viewer = self.image_viewer
+        if viewer is None or not viewer.winfo_exists():
+            viewer = ImageViewerDialog(self, image)
+            self.image_viewer = viewer
+            return viewer
+        viewer.set_image(image)
+        return viewer
 
     def set_preview(self, image_id: str) -> None:
         try:
@@ -390,7 +414,7 @@ class ImageExtractorActionsMixin:
         self._thumbnail_pending.clear()
         self._last_render_range = None
         self._destroy_slot_pool()
-        self.preview_label.configure(image="", text="单击缩略图后显示大图预览")
+        self.preview_label.configure(image="", text="单击缩略图后显示大图预览\n双击此处打开图片查看器")
 
     def _destroy_slot_pool(self) -> None:
         for slot in self._slot_pool:

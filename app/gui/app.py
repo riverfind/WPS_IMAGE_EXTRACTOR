@@ -46,6 +46,7 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         self.thumbnail_refs: dict[str, ImageTk.PhotoImage] = {}
         self.preview_refs: dict[str, ImageTk.PhotoImage] = {}
         self.preview_ref: ImageTk.PhotoImage | None = None
+        self.image_viewer = None
         self._visible_images: list[ImageAsset] = []
         self._slot_pool: list[dict[str, object]] = []
         self._viewport_after_id: str | None = None
@@ -125,7 +126,7 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
 
         ttk.Label(
             left,
-            text="交互说明：\n- 单击缩略图：仅预览\n- 复选框：勾选图片\n- 双击缩略图：定位文档",
+            text="交互说明：\n- 单击缩略图：仅预览\n- 复选框：勾选图片\n- 双击缩略图：定位文档\n- 双击预览栏：打开图片查看器",
             justify="left",
         ).pack(anchor="w", pady=(12, 0))
 
@@ -151,8 +152,9 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         right = ttk.LabelFrame(body, text="预览", padding=10)
         right.pack(side="left", fill="y")
 
-        self.preview_label = ttk.Label(right, text="单击缩略图后显示大图预览", anchor="center")
+        self.preview_label = ttk.Label(right, text="单击缩略图后显示大图预览\n双击此处打开图片查看器", anchor="center")
         self.preview_label.pack(fill="both", expand=True)
+        self.preview_label.bind("<Double-Button-1>", lambda _event: self.open_preview_viewer_from_panel())
         ttk.Label(right, textvariable=self.preview_info_var, justify="left", wraplength=260).pack(fill="x", pady=(10, 0))
 
         status = ttk.Frame(root)

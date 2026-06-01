@@ -17,3 +17,4 @@ docs/
 dist/
 .uploads/
 nuitka-crash-report.xml
+.idea/
