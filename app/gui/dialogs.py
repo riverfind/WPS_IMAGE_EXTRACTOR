@@ -34,6 +34,7 @@ class ImageViewerDialog(tk.Toplevel):
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.bind("<Escape>", self._on_escape_key)
         self.set_image(image)
 
     def _build(self) -> None:
@@ -123,6 +124,10 @@ class ImageViewerDialog(tk.Toplevel):
     def _on_close(self) -> None:
         self.app.image_viewer = None
         self.destroy()
+
+    def _on_escape_key(self, _event: tk.Event) -> str:
+        self._on_close()
+        return "break"
 
 
 class DeleteConfirmDialog(tk.Toplevel):

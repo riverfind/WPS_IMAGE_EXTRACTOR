@@ -20,6 +20,7 @@ class ImageExtractorGridMixin:
         self.bind_all("<Next>", lambda event: self._on_grid_key(event, "page_down"))
         self.bind_all("<Return>", self._on_enter_key)
         self.bind_all("<space>", self._on_space_key)
+        self.bind_all("<o>", self._on_open_viewer_key)
 
     def _on_grid_key(self, event: tk.Event, direction: str) -> str | None:
         if self._should_ignore_grid_key_event():
@@ -82,6 +83,18 @@ class ImageExtractorGridMixin:
             return "break"
         new_selected = not current.selected
         self.on_check(current.id, new_selected)
+        return "break"
+
+    def _on_open_viewer_key(self, _event: tk.Event) -> str | None:
+        if self._should_ignore_grid_key_event():
+            return None
+        try:
+            current = self.service.current_preview()
+        except DocumentError:
+            return "break"
+        if current is None:
+            return "break"
+        self.open_preview_viewer_from_panel()
         return "break"
 
     def _current_visible_index(self) -> int | None:

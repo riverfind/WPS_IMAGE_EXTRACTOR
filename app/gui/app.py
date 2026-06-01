@@ -126,7 +126,7 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
 
         ttk.Label(
             left,
-            text="交互说明：\n- 单击缩略图：仅预览\n- 复选框：勾选图片\n- 双击缩略图：定位文档\n- 双击预览栏：打开图片查看器",
+            text="交互说明：\n- 单击缩略图：仅预览\n- 复选框：勾选图片\n- 双击缩略图：定位文档\n- O 键：单开当前图片\n- 双击预览栏：打开图片查看器",
             justify="left",
         ).pack(anchor="w", pady=(12, 0))
 
