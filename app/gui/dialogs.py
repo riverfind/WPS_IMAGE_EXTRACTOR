@@ -17,6 +17,14 @@ class ImageViewerDialog(tk.Toplevel):
     MIN_SCALE = 0.1
     MAX_SCALE = 8.0
     SCALE_STEP = 1.15
+    DEFAULT_WIDTH = 980
+    DEFAULT_HEIGHT = 760
+    MIN_WINDOW_WIDTH = 420
+    MIN_WINDOW_HEIGHT = 320
+    SCREEN_MARGIN_X = 120
+    SCREEN_MARGIN_Y = 120
+    WINDOW_CHROME_WIDTH = 40
+    WINDOW_CHROME_HEIGHT = 140
 
     def __init__(self, master: "ImageExtractorApp", image: ImageAsset) -> None:
         super().__init__(master)
@@ -26,10 +34,11 @@ class ImageViewerDialog(tk.Toplevel):
         self.photo_ref: ImageTk.PhotoImage | None = None
         self.scale = 1.0
         self.image_item_id: int | None = None
+        self._pending_initial_fit = False
 
         self.title("图片查看器")
-        self.geometry("980x760")
-        self.minsize(420, 320)
+        self.geometry(f"{self.DEFAULT_WIDTH}x{self.DEFAULT_HEIGHT}")
+        self.minsize(self.MIN_WINDOW_WIDTH, self.MIN_WINDOW_HEIGHT)
         self.transient(master)
 
         self._build()
@@ -59,11 +68,10 @@ class ImageViewerDialog(tk.Toplevel):
         canvas_frame.grid_columnconfigure(0, weight=1)
 
         self.canvas.bind("<MouseWheel>", self._on_mousewheel)
-        self.canvas.bind("<Configure>", lambda _event: self._redraw())
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
 
     def set_image(self, image: ImageAsset) -> None:
         self.current_image = image
-        self.scale = 1.0
         try:
             with Image.open(io.BytesIO(image.image_bytes)) as source:
                 self.original_image = source.convert("RGBA")
@@ -75,6 +83,40 @@ class ImageViewerDialog(tk.Toplevel):
             self.title("图片查看器 - 加载失败")
             self.info_var.set(f"{image.name}\n分辨率：{image.resolution_text}\n图片加载失败")
             return
+        self._apply_initial_view()
+
+    def _compute_target_window_size(self, image: Image.Image) -> tuple[int, int]:
+        screen_width = max(self.MIN_WINDOW_WIDTH, self.winfo_screenwidth() - self.SCREEN_MARGIN_X)
+        screen_height = max(self.MIN_WINDOW_HEIGHT, self.winfo_screenheight() - self.SCREEN_MARGIN_Y)
+        target_width = min(screen_width, max(self.MIN_WINDOW_WIDTH, image.width + self.WINDOW_CHROME_WIDTH))
+        target_height = min(screen_height, max(self.MIN_WINDOW_HEIGHT, image.height + self.WINDOW_CHROME_HEIGHT))
+        return (target_width, target_height)
+
+    def _compute_fit_scale(self, canvas_width: int, canvas_height: int) -> float:
+        if self.original_image is None or self.original_image.width <= 0 or self.original_image.height <= 0:
+            return 1.0
+        width_scale = canvas_width / self.original_image.width
+        height_scale = canvas_height / self.original_image.height
+        fit_scale = min(width_scale, height_scale)
+        return max(self.MIN_SCALE, min(self.MAX_SCALE, fit_scale))
+
+    def _apply_initial_view(self) -> None:
+        if self.original_image is None:
+            return
+        target_width, target_height = self._compute_target_window_size(self.original_image)
+        self._pending_initial_fit = True
+        self.geometry(f"{target_width}x{target_height}")
+        self.after_idle(self._finalize_initial_view)
+
+    def _finalize_initial_view(self) -> None:
+        if self.original_image is None:
+            self._pending_initial_fit = False
+            return
+        self.update_idletasks()
+        canvas_width = max(1, self.canvas.winfo_width())
+        canvas_height = max(1, self.canvas.winfo_height())
+        self.scale = self._compute_fit_scale(canvas_width, canvas_height)
+        self._pending_initial_fit = False
         self._redraw()
 
     def _on_mousewheel(self, event: tk.Event) -> None:
@@ -88,6 +130,11 @@ class ImageViewerDialog(tk.Toplevel):
         if abs(next_scale - self.scale) < 1e-6:
             return
         self.scale = next_scale
+        self._redraw()
+
+    def _on_canvas_configure(self, _event: tk.Event) -> None:
+        if self._pending_initial_fit:
+            return
         self._redraw()
 
     def _redraw(self) -> None:
