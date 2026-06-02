@@ -147,6 +147,9 @@ class ImageExtractorGridMixin:
         return self.CARD_WIDTH + self.CARD_PAD_X * 2
 
     def _compute_grid_columns(self) -> int:
+        allocated_columns = getattr(self, "_allocated_grid_columns", None)
+        if allocated_columns is not None:
+            return allocated_columns
         canvas_width = self.canvas.winfo_width()
         if canvas_width <= 1:
             return self._grid_columns

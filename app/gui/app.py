@@ -22,6 +22,10 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
     CARD_PAD_X = 10
     CARD_PAD_Y = 10
     OVERSCAN_ROWS = 2
+    PREVIEW_MIN_WIDTH = 320
+    PREVIEW_MAX_WIDTH = 520
+    PREVIEW_LAYOUT_GAP = 24
+    CENTER_LAYOUT_PADDING_X = 20
     SIZE_FILTER_MODE_MAP = {"精确": "exact", "最小": "min", "最大": "max"}
 
     def __init__(self) -> None:
@@ -51,8 +55,13 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         self._slot_pool: list[dict[str, object]] = []
         self._viewport_after_id: str | None = None
         self._filter_refresh_after_id: str | None = None
+        self._preview_refresh_after_id: str | None = None
+        self._body_layout_after_id: str | None = None
         self._empty_label_id: int | None = None
         self._last_render_range: tuple[int, int] | None = None
+        self._last_preview_panel_size: tuple[int, int] | None = None
+        self._last_body_layout_signature: tuple[int, int, int, int] | None = None
+        self._allocated_grid_columns: int | None = None
         self._thumbnail_result_queue: queue.Queue[tuple[int, str, Image.Image]] = queue.Queue()
         self._thumbnail_queue_empty_exception = queue.Empty
         self._thumbnail_pending: set[str] = set()
@@ -86,26 +95,31 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         ttk.Button(toolbar, text="导入过滤MD5...", command=self.import_filtered_md5s).pack(side="left", padx=(8, 0))
         ttk.Button(toolbar, text="导出所选...", command=self.export_selected).pack(side="left", padx=(8, 0))
 
-        body = ttk.Frame(root)
-        body.pack(fill="both", expand=True)
+        self.body = ttk.Frame(root)
+        self.body.pack(fill="both", expand=True)
+        self.body.grid_rowconfigure(0, weight=1)
+        self.body.grid_columnconfigure(0, weight=0)
+        self.body.grid_columnconfigure(1, weight=0)
+        self.body.grid_columnconfigure(2, weight=1)
+        self.body.bind("<Configure>", self._on_body_configure)
 
-        left = ttk.LabelFrame(body, text="文档信息", padding=10)
-        left.pack(side="left", fill="y")
+        self.left_panel = ttk.LabelFrame(self.body, text="文档信息", padding=10)
+        self.left_panel.grid(row=0, column=0, sticky="ns")
 
-        ttk.Label(left, textvariable=self.doc_name_var, wraplength=220).pack(anchor="w")
-        ttk.Label(left, textvariable=self.total_var).pack(anchor="w", pady=(8, 0))
-        ttk.Label(left, textvariable=self.duplicate_var).pack(anchor="w", pady=(4, 0))
-        ttk.Label(left, textvariable=self.selection_var).pack(anchor="w", pady=(4, 0))
-        ttk.Label(left, textvariable=self.filtered_var).pack(anchor="w", pady=(4, 0))
+        ttk.Label(self.left_panel, textvariable=self.doc_name_var, wraplength=220).pack(anchor="w")
+        ttk.Label(self.left_panel, textvariable=self.total_var).pack(anchor="w", pady=(8, 0))
+        ttk.Label(self.left_panel, textvariable=self.duplicate_var).pack(anchor="w", pady=(4, 0))
+        ttk.Label(self.left_panel, textvariable=self.selection_var).pack(anchor="w", pady=(4, 0))
+        ttk.Label(self.left_panel, textvariable=self.filtered_var).pack(anchor="w", pady=(4, 0))
 
-        ttk.Separator(left).pack(fill="x", pady=10)
-        ttk.Label(left, text="搜索文件名 / MD5 / 部件").pack(anchor="w")
-        self.search_entry = ttk.Entry(left, textvariable=self.query_var, width=26)
+        ttk.Separator(self.left_panel).pack(fill="x", pady=10)
+        ttk.Label(self.left_panel, text="搜索文件名 / MD5 / 部件").pack(anchor="w")
+        self.search_entry = ttk.Entry(self.left_panel, textvariable=self.query_var, width=26)
         self.search_entry.pack(fill="x", pady=(6, 0))
 
-        ttk.Label(left, text="尺寸过滤").pack(anchor="w", pady=(12, 0))
+        ttk.Label(self.left_panel, text="尺寸过滤").pack(anchor="w", pady=(12, 0))
         self.size_mode_combo = ttk.Combobox(
-            left,
+            self.left_panel,
             textvariable=self.size_mode_var,
             values=list(self.SIZE_FILTER_MODE_MAP),
             state="readonly",
@@ -114,7 +128,7 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         self.size_mode_combo.pack(fill="x", pady=(6, 0))
         self.size_mode_combo.bind("<<ComboboxSelected>>", lambda _event: self._schedule_filter_refresh(delay_ms=0))
 
-        size_row = ttk.Frame(left)
+        size_row = ttk.Frame(self.left_panel)
         size_row.pack(fill="x", pady=(6, 0))
         ttk.Label(size_row, text="宽").pack(side="left")
         self.width_filter_entry = ttk.Entry(size_row, textvariable=self.width_filter_var, width=10)
@@ -122,18 +136,18 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         ttk.Label(size_row, text="高").pack(side="left")
         self.height_filter_entry = ttk.Entry(size_row, textvariable=self.height_filter_var, width=10)
         self.height_filter_entry.pack(side="left", padx=(6, 0))
-        ttk.Label(left, text="输入正整数或 *，* 表示该维度不参与").pack(anchor="w", pady=(4, 0))
+        ttk.Label(self.left_panel, text="输入正整数或 *，* 表示该维度不参与").pack(anchor="w", pady=(4, 0))
 
         ttk.Label(
-            left,
+            self.left_panel,
             text="交互说明：\n- 单击缩略图：仅预览\n- 复选框：勾选图片\n- 双击缩略图：定位文档\n- O 键：单开当前图片\n- 双击预览栏：打开图片查看器",
             justify="left",
         ).pack(anchor="w", pady=(12, 0))
 
-        center = ttk.LabelFrame(body, text="缩略图区", padding=0)
-        center.pack(side="left", fill="both", expand=True, padx=(10, 10))
+        self.center_panel = ttk.LabelFrame(self.body, text="缩略图区", padding=0)
+        self.center_panel.grid(row=0, column=1, sticky="nsew", padx=(10, 10))
 
-        canvas_area = ttk.Frame(center)
+        canvas_area = ttk.Frame(self.center_panel)
         canvas_area.pack(fill="both", expand=True)
 
         self.canvas = tk.Canvas(canvas_area, bg="#f3f4f6", highlightthickness=0)
@@ -149,13 +163,24 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         self.canvas.bind("<MouseWheel>", self._on_mousewheel)
         self.canvas.bind("<Shift-MouseWheel>", self._on_shift_mousewheel)
 
-        right = ttk.LabelFrame(body, text="预览", padding=10)
-        right.pack(side="left", fill="y")
+        self.preview_panel = ttk.LabelFrame(self.body, text="预览", padding=10)
+        self.preview_panel.grid(row=0, column=2, sticky="nsew")
+        self.preview_panel.bind("<Configure>", self._on_preview_panel_configure)
 
-        self.preview_label = ttk.Label(right, text="单击缩略图后显示大图预览\n双击此处打开图片查看器", anchor="center")
-        self.preview_label.pack(fill="both", expand=True)
+        self.preview_image_area = ttk.Frame(self.preview_panel)
+        self.preview_image_area.pack(fill="both", expand=True)
+        self.preview_image_area.pack_propagate(False)
+
+        self.preview_label = ttk.Label(
+            self.preview_image_area,
+            text="单击缩略图后显示大图预览\n双击此处打开图片查看器",
+            anchor="center",
+        )
+        self.preview_label.place(relx=0.5, rely=0.5, anchor="center")
         self.preview_label.bind("<Double-Button-1>", lambda _event: self.open_preview_viewer_from_panel())
-        ttk.Label(right, textvariable=self.preview_info_var, justify="left", wraplength=260).pack(fill="x", pady=(10, 0))
+        self.preview_info_label = ttk.Label(self.preview_panel, textvariable=self.preview_info_var, justify="left", wraplength=260)
+        self.preview_info_label.pack(fill="x", pady=(10, 0))
+        self.after_idle(self._schedule_body_layout)
 
         status = ttk.Frame(root)
         status.pack(fill="x", pady=(8, 0))
@@ -203,6 +228,82 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
     def _apply_filter_refresh(self) -> None:
         self._filter_refresh_after_id = None
         self.refresh_grid(recompute_visible=True, reset_x=False, force=False)
+
+    def _required_center_width(self, columns: int) -> int:
+        scrollbar_width = max(16, self.scrollbar.winfo_reqwidth())
+        return max(self._column_span(), columns * self._column_span()) + scrollbar_width + 8
+
+    def _compute_allocated_grid_columns(self, available_width: int) -> int:
+        for columns in range(self.GRID_COLUMNS, self.MIN_GRID_COLUMNS - 1, -1):
+            if self._required_center_width(columns) <= available_width:
+                return columns
+        return self.MIN_GRID_COLUMNS
+
+    def _on_body_configure(self, _event: tk.Event) -> None:
+        self._schedule_body_layout()
+
+    def _schedule_body_layout(self, delay_ms: int = 0) -> None:
+        if self._body_layout_after_id is not None:
+            self.after_cancel(self._body_layout_after_id)
+        self._body_layout_after_id = self.after(delay_ms, self._apply_body_layout)
+
+    def _apply_body_layout(self) -> None:
+        self._body_layout_after_id = None
+        total_width = self.body.winfo_width()
+        left_width = max(self.left_panel.winfo_width(), self.left_panel.winfo_reqwidth())
+        total_content_width = max(
+            self._required_center_width(self.MIN_GRID_COLUMNS),
+            total_width - left_width - self.CENTER_LAYOUT_PADDING_X,
+        )
+        min_center_width = self._required_center_width(self.MIN_GRID_COLUMNS)
+        layout_gap = min(
+            self.PREVIEW_LAYOUT_GAP,
+            max(0, total_content_width - min_center_width - self.PREVIEW_MIN_WIDTH),
+        )
+        preview_reserved_width = self.PREVIEW_MIN_WIDTH
+        reserved_preview_width = min(
+            preview_reserved_width,
+            max(0, total_content_width - min_center_width - layout_gap),
+        )
+        center_available_width = max(min_center_width, total_content_width - reserved_preview_width - layout_gap)
+        columns = self._compute_allocated_grid_columns(center_available_width)
+        center_width = min(center_available_width, self._required_center_width(columns))
+        preview_width = max(0, total_content_width - center_width - layout_gap)
+        if preview_width > 0:
+            preview_width_cap = max(0, total_content_width - min_center_width - layout_gap)
+            preview_width = min(
+                preview_width_cap,
+                self.PREVIEW_MAX_WIDTH,
+                max(self.PREVIEW_MIN_WIDTH, preview_width),
+            )
+            center_width = max(min_center_width, total_content_width - preview_width - layout_gap)
+
+        signature = (total_width, left_width, center_width, preview_width)
+        if signature == self._last_body_layout_signature:
+            return
+        self._last_body_layout_signature = signature
+        self._allocated_grid_columns = columns
+        self.body.grid_columnconfigure(1, minsize=center_width, weight=1)
+        self.body.grid_columnconfigure(2, minsize=max(0, preview_width), weight=0)
+        self._schedule_preview_refresh()
+
+    def _on_preview_panel_configure(self, _event: tk.Event) -> None:
+        current_size = (self.preview_panel.winfo_width(), self.preview_panel.winfo_height())
+        if current_size == self._last_preview_panel_size:
+            return
+        self._last_preview_panel_size = current_size
+        self._schedule_preview_refresh()
+
+    def _schedule_preview_refresh(self, delay_ms: int = 80) -> None:
+        if self._preview_refresh_after_id is not None:
+            self.after_cancel(self._preview_refresh_after_id)
+        self._preview_refresh_after_id = self.after(delay_ms, self._apply_preview_refresh)
+
+    def _apply_preview_refresh(self) -> None:
+        self._preview_refresh_after_id = None
+        wraplength = max(220, self.preview_panel.winfo_width() - 24)
+        self.preview_info_label.configure(wraplength=wraplength)
+        self.refresh_preview()
 
 
 def run() -> None:

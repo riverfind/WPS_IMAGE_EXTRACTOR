@@ -10,6 +10,16 @@ from .dialogs import DeleteConfirmDialog, FilteredImagesDialog, ImageViewerDialo
 
 
 class ImageExtractorActionsMixin:
+    def _current_preview_target_size(self) -> tuple[int, int]:
+        image_area_width = self.preview_image_area.winfo_width()
+        image_area_height = self.preview_image_area.winfo_height()
+        if image_area_width > 32 and image_area_height > 32:
+            available_width = max(220, image_area_width - 8)
+            available_height = max(220, image_area_height - 8)
+            return (available_width, available_height)
+
+        return (320, 320)
+
     def open_document(self) -> None:
         path = filedialog.askopenfilename(
             title="选择 WPS 文档",
@@ -125,12 +135,14 @@ class ImageExtractorActionsMixin:
         except DocumentError:
             return
 
+        self.preview_info_label.configure(wraplength=max(220, self.preview_panel.winfo_width() - 24))
+
         if current is None:
             self.preview_label.configure(text="没有可预览图片", image="")
             self.preview_info_var.set("请先打开文档。")
             return
 
-        preview = self.build_photo(current, (320, 320), self.preview_refs)
+        preview = self.build_photo(current, self._current_preview_target_size(), self.preview_refs)
         self.preview_ref = preview
         self.preview_label.configure(image=preview, text="")
 
@@ -415,6 +427,7 @@ class ImageExtractorActionsMixin:
         self._last_render_range = None
         self._destroy_slot_pool()
         self.preview_label.configure(image="", text="单击缩略图后显示大图预览\n双击此处打开图片查看器")
+        self.preview_info_label.configure(wraplength=max(220, self.preview_panel.winfo_width() - 24))
 
     def _destroy_slot_pool(self) -> None:
         for slot in self._slot_pool:
