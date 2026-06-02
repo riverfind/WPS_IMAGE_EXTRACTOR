@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import queue
 import tkinter as tk
+from pathlib import Path
 
 from PIL import Image, ImageTk
 from tkinter import messagebox, ttk
@@ -26,6 +27,7 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
     PREVIEW_MAX_WIDTH = 520
     PREVIEW_LAYOUT_GAP = 24
     CENTER_LAYOUT_PADDING_X = 20
+    DOCUMENT_WATCH_INTERVAL_MS = 1200
     SIZE_FILTER_MODE_MAP = {"精确": "exact", "最小": "min", "最大": "max"}
 
     def __init__(self) -> None:
@@ -57,11 +59,16 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         self._filter_refresh_after_id: str | None = None
         self._preview_refresh_after_id: str | None = None
         self._body_layout_after_id: str | None = None
+        self._document_watch_after_id: str | None = None
         self._empty_label_id: int | None = None
         self._last_render_range: tuple[int, int] | None = None
         self._last_preview_panel_size: tuple[int, int] | None = None
         self._last_body_layout_signature: tuple[int, int, int, int] | None = None
         self._allocated_grid_columns: int | None = None
+        self._document_watch_signature: tuple[int, int] | None = None
+        self._document_watch_in_progress = False
+        self._document_watch_failed_signature: tuple[int, int] | None = None
+        self._document_watch_last_notice: str | None = None
         self._thumbnail_result_queue: queue.Queue[tuple[int, str, Image.Image]] = queue.Queue()
         self._thumbnail_queue_empty_exception = queue.Empty
         self._thumbnail_pending: set[str] = set()
@@ -75,6 +82,7 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         self.width_filter_var.trace_add("write", lambda *_args: self._schedule_filter_refresh())
         self.height_filter_var.trace_add("write", lambda *_args: self._schedule_filter_refresh())
         self.after(50, self._poll_thumbnail_results)
+        self.after(self.DOCUMENT_WATCH_INTERVAL_MS, self._poll_document_change)
 
     def _build_layout(self) -> None:
         root = ttk.Frame(self, padding=10)
@@ -304,6 +312,83 @@ class ImageExtractorApp(ImageExtractorActionsMixin, ImageExtractorGridMixin, tk.
         wraplength = max(220, self.preview_panel.winfo_width() - 24)
         self.preview_info_label.configure(wraplength=wraplength)
         self.refresh_preview()
+
+    def _read_document_signature(self, document_path: Path) -> tuple[int, int] | None:
+        try:
+            stat = document_path.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _reset_document_watch_state(self) -> None:
+        self._document_watch_signature = None
+        self._document_watch_failed_signature = None
+        self._document_watch_last_notice = None
+
+    def _update_document_watch_baseline(self) -> None:
+        try:
+            session = self.service.require_session()
+        except DocumentError:
+            self._reset_document_watch_state()
+            return
+
+        signature = self._read_document_signature(session.document_path)
+        self._document_watch_signature = signature
+        self._document_watch_failed_signature = None
+        self._document_watch_last_notice = None
+
+    def _schedule_document_watch(self, delay_ms: int | None = None) -> None:
+        if self._document_watch_after_id is not None:
+            self.after_cancel(self._document_watch_after_id)
+        wait_ms = self.DOCUMENT_WATCH_INTERVAL_MS if delay_ms is None else delay_ms
+        self._document_watch_after_id = self.after(wait_ms, self._poll_document_change)
+
+    def _poll_document_change(self) -> None:
+        self._document_watch_after_id = None
+        try:
+            session = self.service.require_session()
+        except DocumentError:
+            self._reset_document_watch_state()
+            self._schedule_document_watch()
+            return
+
+        if self._document_watch_in_progress:
+            self._schedule_document_watch()
+            return
+
+        current_signature = self._read_document_signature(session.document_path)
+        if current_signature is None:
+            notice = f"文档监听：暂时无法读取 {session.document_path.name}，等待下次检测。"
+            if notice != self._document_watch_last_notice:
+                self.status_var.set(notice)
+                self._document_watch_last_notice = notice
+            self._schedule_document_watch()
+            return
+
+        if self._document_watch_signature is None:
+            self._document_watch_signature = current_signature
+            self._document_watch_last_notice = None
+            self._schedule_document_watch()
+            return
+
+        if current_signature == self._document_watch_signature:
+            self._document_watch_failed_signature = None
+            self._document_watch_last_notice = None
+            self._schedule_document_watch()
+            return
+
+        self._document_watch_in_progress = True
+        try:
+            success = self.reload_document_preserving_state(auto_triggered=True)
+        finally:
+            self._document_watch_in_progress = False
+
+        if success:
+            self._update_document_watch_baseline()
+        else:
+            self._document_watch_failed_signature = current_signature
+
+        self._schedule_document_watch()
 
 
 def run() -> None:

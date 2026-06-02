@@ -10,6 +10,77 @@ from .dialogs import DeleteConfirmDialog, FilteredImagesDialog, ImageViewerDialo
 
 
 class ImageExtractorActionsMixin:
+    def _display_size_mode(self, mode: str) -> str:
+        for label, value in self.SIZE_FILTER_MODE_MAP.items():
+            if value == mode:
+                return label
+        return "精确"
+
+    def _snapshot_session_state(self) -> dict[str, object]:
+        session = self.service.require_session()
+        return {
+            "query_text": self.query_var.get(),
+            "size_filter_mode": self.SIZE_FILTER_MODE_MAP.get(self.size_mode_var.get().strip(), "exact"),
+            "size_filter_width": self.width_filter_var.get(),
+            "size_filter_height": self.height_filter_var.get(),
+            "preview_image_id": session.preview_image_id,
+            "selected_ids": {image.id for image in session.images if image.selected},
+            "hidden_ids": {image.id for image in session.images if image.hidden},
+        }
+
+    def _restore_session_state(self, snapshot: dict[str, object]) -> None:
+        session = self.service.require_session()
+        self.query_var.set(str(snapshot["query_text"]))
+        self.size_mode_var.set(self._display_size_mode(str(snapshot["size_filter_mode"])))
+        self.width_filter_var.set(str(snapshot["size_filter_width"]))
+        self.height_filter_var.set(str(snapshot["size_filter_height"]))
+
+        selected_ids = snapshot["selected_ids"]
+        hidden_ids = snapshot["hidden_ids"]
+        if isinstance(selected_ids, set) and isinstance(hidden_ids, set):
+            for image in session.images:
+                image.hidden = image.id in hidden_ids
+                image.selected = image.id in selected_ids
+
+        preview_image_id = snapshot["preview_image_id"]
+        if isinstance(preview_image_id, str) and session.get_image(preview_image_id) is not None:
+            session.preview_image_id = preview_image_id
+
+    def reload_document_preserving_state(self, *, auto_triggered: bool = False) -> bool:
+        try:
+            current_path = self.service.require_session().document_path
+            snapshot = self._snapshot_session_state()
+        except DocumentError as exc:
+            if auto_triggered:
+                self.status_var.set(f"自动重载失败：{exc}")
+                return False
+            messagebox.showwarning("提示", str(exc), parent=self)
+            return False
+
+        try:
+            session = self.service.open_document(current_path)
+        except (DocumentError, OSError) as exc:
+            if auto_triggered:
+                notice = f"检测到文档变更，但自动重载失败：{exc}"
+                if notice != self._document_watch_last_notice:
+                    self.status_var.set(notice)
+                    self._document_watch_last_notice = notice
+                return False
+            messagebox.showerror("重新加载失败", str(exc), parent=self)
+            self.status_var.set(f"重新加载失败：{exc}")
+            return False
+
+        self._restore_session_state(snapshot)
+        self._reset_document_view_state()
+        self._update_document_watch_baseline()
+        if auto_triggered:
+            notice = f"检测到文档变更，已自动重载 {session.document_path.name}，共提取 {session.total_images} 张图片。"
+            self.status_var.set(notice)
+            self._document_watch_last_notice = notice
+        self.refresh_all(reset_grid_x=True, force_grid=True)
+        self._focus_grid_area()
+        return True
+
     def _current_preview_target_size(self) -> tuple[int, int]:
         image_area_width = self.preview_image_area.winfo_width()
         image_area_height = self.preview_image_area.winfo_height()
@@ -43,28 +114,20 @@ class ImageExtractorActionsMixin:
             return
 
         self._reset_document_view_state()
+        self._update_document_watch_baseline()
         self.status_var.set(f"已打开 {session.document_path.name}，共提取 {session.total_images} 张图片。")
         self.refresh_all(reset_grid_x=True, force_grid=True)
         self._focus_grid_area()
 
     def reload_document(self) -> None:
+        success = self.reload_document_preserving_state(auto_triggered=False)
+        if not success:
+            return
         try:
-            current_path = self.service.require_session().document_path
+            session = self.service.require_session()
         except DocumentError:
-            messagebox.showwarning("提示", "请先打开一个文档。", parent=self)
             return
-
-        try:
-            session = self.service.open_document(current_path)
-        except (DocumentError, OSError) as exc:
-            messagebox.showerror("重新加载失败", str(exc), parent=self)
-            self.status_var.set(f"重新加载失败：{exc}")
-            return
-
-        self._reset_document_view_state()
         self.status_var.set(f"已重新加载 {session.document_path.name}，共提取 {session.total_images} 张图片。")
-        self.refresh_all(reset_grid_x=True, force_grid=True)
-        self._focus_grid_area()
 
     def refresh_all(self, *, reset_grid_x: bool = False, force_grid: bool = True) -> None:
         try:
@@ -392,6 +455,7 @@ class ImageExtractorActionsMixin:
             f"已删除 {deleted_count} 张图片。\n已生成备份：{backup_path}",
             parent=self,
         )
+        self._update_document_watch_baseline()
         self.refresh_all(reset_grid_x=True, force_grid=True)
         self._focus_grid_area()
 
@@ -422,6 +486,7 @@ class ImageExtractorActionsMixin:
         self.thumbnail_refs.clear()
         self.preview_refs.clear()
         self.preview_ref = None
+        self._reset_document_watch_state()
         self._thumbnail_generation += 1
         self._thumbnail_pending.clear()
         self._last_render_range = None
