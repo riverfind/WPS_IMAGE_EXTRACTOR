@@ -258,6 +258,22 @@ class ImageExtractorActionsMixin:
         self.refresh_preview()
         self._focus_grid_area()
 
+    def set_preview_from_viewer(self, image_id: str) -> bool:
+        try:
+            self.service.set_preview(image_id)
+        except DocumentError:
+            return False
+        target_index = None
+        for index, image in enumerate(self._visible_images):
+            if image.id == image_id:
+                target_index = index
+                break
+        self._refresh_visible_slot_styles()
+        self.refresh_preview()
+        if target_index is not None:
+            self._scroll_index_into_view(target_index)
+        return True
+
     def on_check(self, image_id: str, selected: bool) -> None:
         try:
             self.service.toggle_selection(image_id, selected)

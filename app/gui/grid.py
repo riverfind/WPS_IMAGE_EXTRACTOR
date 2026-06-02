@@ -59,10 +59,24 @@ class ImageExtractorGridMixin:
         focused = self.focus_get()
         if focused is None:
             return False
+        if self._is_focus_inside_image_viewer(focused):
+            return True
         if focused == self.search_entry:
             return True
         widget_class = focused.winfo_class()
         return widget_class in {"Entry", "TEntry", "Text", "Spinbox", "TSpinbox", "Combobox", "TCombobox"}
+
+    def _is_focus_inside_image_viewer(self, focused: tk.Misc) -> bool:
+        viewer = getattr(self, "image_viewer", None)
+        if viewer is None or not viewer.winfo_exists():
+            return False
+
+        current: tk.Misc | None = focused
+        while current is not None:
+            if current == viewer:
+                return True
+            current = current.master
+        return False
 
     def _on_enter_key(self, _event: tk.Event) -> str | None:
         if self._should_ignore_grid_key_event():

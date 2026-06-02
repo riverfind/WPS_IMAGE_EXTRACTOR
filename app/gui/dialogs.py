@@ -17,6 +17,8 @@ class ImageViewerDialog(tk.Toplevel):
     MIN_SCALE = 0.1
     MAX_SCALE = 8.0
     SCALE_STEP = 1.15
+    INITIAL_FIT_RETRY_MS = 16
+    INITIAL_FIT_MAX_RETRIES = 6
     DEFAULT_WIDTH = 980
     DEFAULT_HEIGHT = 760
     MIN_WINDOW_WIDTH = 420
@@ -35,6 +37,10 @@ class ImageViewerDialog(tk.Toplevel):
         self.scale = 1.0
         self.image_item_id: int | None = None
         self._pending_initial_fit = False
+        self._pending_view_reset = False
+        self._initial_fit_retry_count = 0
+        self._initial_fit_canvas_size: tuple[int, int] | None = None
+        self._pending_window_size: tuple[int, int] | None = None
 
         self.title("图片查看器")
         self.geometry(f"{self.DEFAULT_WIDTH}x{self.DEFAULT_HEIGHT}")
@@ -42,9 +48,11 @@ class ImageViewerDialog(tk.Toplevel):
         self.transient(master)
 
         self._build()
+        self._bind_navigation_keys()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.bind("<Escape>", self._on_escape_key)
         self.set_image(image)
+        self.after_idle(self._focus_viewer)
 
     def _build(self) -> None:
         outer = ttk.Frame(self, padding=10)
@@ -70,6 +78,22 @@ class ImageViewerDialog(tk.Toplevel):
         self.canvas.bind("<MouseWheel>", self._on_mousewheel)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
+    def _bind_navigation_keys(self) -> None:
+        self.bind("<Left>", lambda _event: self._move_visible_image(-1))
+        self.bind("<Right>", lambda _event: self._move_visible_image(1))
+        self.bind("<h>", lambda _event: self._move_visible_image(-1))
+        self.bind("<l>", lambda _event: self._move_visible_image(1))
+        self.bind("<Return>", self._on_enter_key)
+        self.canvas.bind("<Left>", lambda _event: self._move_visible_image(-1))
+        self.canvas.bind("<Right>", lambda _event: self._move_visible_image(1))
+        self.canvas.bind("<h>", lambda _event: self._move_visible_image(-1))
+        self.canvas.bind("<l>", lambda _event: self._move_visible_image(1))
+        self.canvas.bind("<Return>", self._on_enter_key)
+
+    def _focus_viewer(self) -> None:
+        self.focus_force()
+        self.canvas.focus_set()
+
     def set_image(self, image: ImageAsset) -> None:
         self.current_image = image
         try:
@@ -78,12 +102,19 @@ class ImageViewerDialog(tk.Toplevel):
         except Exception:
             self.original_image = None
             self.photo_ref = None
+            self._pending_initial_fit = False
+            self._pending_view_reset = False
+            self._initial_fit_retry_count = 0
+            self._initial_fit_canvas_size = None
+            self._pending_window_size = None
             self.canvas.delete("all")
             self.canvas.configure(scrollregion=(0, 0, 0, 0))
             self.title("图片查看器 - 加载失败")
             self.info_var.set(f"{image.name}\n分辨率：{image.resolution_text}\n图片加载失败")
+            self.after_idle(self._focus_viewer)
             return
         self._apply_initial_view()
+        self.after_idle(self._focus_viewer)
 
     def _compute_target_window_size(self, image: Image.Image) -> tuple[int, int]:
         screen_width = max(self.MIN_WINDOW_WIDTH, self.winfo_screenwidth() - self.SCREEN_MARGIN_X)
@@ -105,19 +136,82 @@ class ImageViewerDialog(tk.Toplevel):
             return
         target_width, target_height = self._compute_target_window_size(self.original_image)
         self._pending_initial_fit = True
+        self._pending_view_reset = True
+        self._initial_fit_retry_count = 0
+        self._initial_fit_canvas_size = None
+        self._pending_window_size = (target_width, target_height)
         self.geometry(f"{target_width}x{target_height}")
         self.after_idle(self._finalize_initial_view)
 
     def _finalize_initial_view(self) -> None:
         if self.original_image is None:
             self._pending_initial_fit = False
+            self._pending_view_reset = False
+            self._initial_fit_retry_count = 0
+            self._initial_fit_canvas_size = None
+            self._pending_window_size = None
             return
         self.update_idletasks()
+        if self._should_retry_initial_fit():
+            self._initial_fit_retry_count += 1
+            self.after(self.INITIAL_FIT_RETRY_MS, self._finalize_initial_view)
+            return
         canvas_width = max(1, self.canvas.winfo_width())
         canvas_height = max(1, self.canvas.winfo_height())
         self.scale = self._compute_fit_scale(canvas_width, canvas_height)
-        self._pending_initial_fit = False
+        self._initial_fit_canvas_size = (canvas_width, canvas_height)
         self._redraw()
+        self.after_idle(self._complete_initial_view)
+
+    def _should_retry_initial_fit(self) -> bool:
+        if self._initial_fit_retry_count >= self.INITIAL_FIT_MAX_RETRIES:
+            return False
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        if canvas_width <= 1 or canvas_height <= 1:
+            return True
+        if self._pending_window_size is None:
+            return False
+        window_width = self.winfo_width()
+        window_height = self.winfo_height()
+        target_width, target_height = self._pending_window_size
+        return abs(window_width - target_width) > 4 or abs(window_height - target_height) > 4
+
+    def _complete_initial_view(self) -> None:
+        if self.original_image is None:
+            self._pending_initial_fit = False
+            self._pending_view_reset = False
+            self._initial_fit_retry_count = 0
+            self._initial_fit_canvas_size = None
+            self._pending_window_size = None
+            return
+        self.update_idletasks()
+        if self._should_refit_after_redraw():
+            self._initial_fit_retry_count += 1
+            self.after(self.INITIAL_FIT_RETRY_MS, self._finalize_initial_view)
+            return
+        self._pending_initial_fit = False
+        self._initial_fit_retry_count = 0
+        self._initial_fit_canvas_size = None
+        self._pending_window_size = None
+        self._reset_canvas_view()
+
+    def _should_refit_after_redraw(self) -> bool:
+        if self._initial_fit_retry_count >= self.INITIAL_FIT_MAX_RETRIES:
+            return False
+        if self._initial_fit_canvas_size is None:
+            return False
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        fit_canvas_width, fit_canvas_height = self._initial_fit_canvas_size
+        return abs(canvas_width - fit_canvas_width) > 4 or abs(canvas_height - fit_canvas_height) > 4
+
+    def _reset_canvas_view(self) -> None:
+        if not self._pending_view_reset:
+            return
+        self.canvas.xview_moveto(0.0)
+        self.canvas.yview_moveto(0.0)
+        self._pending_view_reset = False
 
     def _on_mousewheel(self, event: tk.Event) -> None:
         if self.original_image is None:
@@ -136,6 +230,46 @@ class ImageViewerDialog(tk.Toplevel):
         if self._pending_initial_fit:
             return
         self._redraw()
+
+    def _move_visible_image(self, step: int) -> str:
+        visible_images = getattr(self.app, "_visible_images", [])
+        if not visible_images:
+            return "break"
+
+        current = self.app.service.current_preview()
+        if current is None:
+            return "break"
+
+        current_index = None
+        for index, image in enumerate(visible_images):
+            if image.id == current.id:
+                current_index = index
+                break
+        if current_index is None:
+            return "break"
+
+        target_index = current_index + step
+        if target_index < 0 or target_index >= len(visible_images):
+            return "break"
+
+        target = visible_images[target_index]
+        if not self.app.set_preview_from_viewer(target.id):
+            return "break"
+        self.set_image(target)
+        return "break"
+
+    def _on_enter_key(self, _event: tk.Event) -> str:
+        self._locate_current_image()
+        return "break"
+
+    def _locate_current_image(self) -> None:
+        result = self.app.locate_image(self.current_image.id)
+        if result.success:
+            messagebox.showinfo("定位结果", result.message, parent=self)
+        else:
+            messagebox.showwarning("定位提示", result.message, parent=self)
+        self.app.refresh_preview()
+        self._focus_viewer()
 
     def _redraw(self) -> None:
         if self.original_image is None:
